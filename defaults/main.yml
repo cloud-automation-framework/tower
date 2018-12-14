@@ -1,0 +1,5 @@
+---
+# defaults file for ocp_deploy_cluster
+tower_dest: /root
+tower_version: 3.2.0-1.el7
+tower_backup_dest: "/opt/backup"

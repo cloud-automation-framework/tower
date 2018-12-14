@@ -1,0 +1,105 @@
+---
+- name: Check tower_cli file exists
+  stat:
+    path: /root/.tower_cli.cfg
+  register: tower_cli_cfg
+
+- name: Read the tower_cli file
+  command: cat /root/.tower_cli.cfg
+  register: tower_credentials
+  changed_when: false
+  when: tower_cli_cfg.stat.exists is defined
+
+- name: Generate Password if no tower_cli file
+  shell: echo $( openssl rand -base64 32 | tr -d -c "a-zA-Z0-9" | head -c 12 )
+  register: ansible_admin_password_create
+  when: ( tower_cli_cfg.stat.exists is not defined ) or ( tower_credentials.stdout.find('password') == -1 )
+  no_log: True
+
+- name: Cleanup cache to ensure clean installation
+  file:
+    path: "{{ item }}"
+    state: absent
+  with_items:
+    - /var/cache/yum/x86_64
+
+- name: Extract password from tower_cli file
+  shell:  awk -F' = ' '/password/{print $2}' /root/.tower_cli.cfg
+  register: ansible_admin_password_extract
+  when: ( tower_cli_cfg.stat.exists is defined ) and ( tower_credentials.stdout.find('password') != -1 )
+  no_log: True
+  changed_when: false
+
+- name: Set the password
+  set_fact:
+    ansible_admin_password: "{% if ansible_admin_password_extract.stdout is defined %}{{ ansible_admin_password_extract.stdout }}{% else %}{{ ansible_admin_password_create.stdout }}{% endif %}"
+  no_log: True
+
+- name: Check installation directory exists
+  stat:
+    path: "{{ tower_dest }}/ansible-tower-setup-bundle-{{ tower_version }}"
+  register: tower_downloaded
+
+- name: Download and Extract bundle
+  unarchive:
+    src: "https://releases.ansible.com/ansible-tower/setup-bundle/ansible-tower-setup-bundle-{{ tower_version }}.tar.gz"
+    dest: "{{ tower_dest }}"
+    remote_src: True
+    exclude: "inventory"
+  when: tower_downloaded.stat.exists == false
+  register: oc_create_template
+
+- name: Copy inventory to Tower box
+  template:
+    src: "{{ role_path }}/templates/tower-inventory.j2"
+    dest: "{{ tower_dest }}/ansible-tower-setup-bundle-{{ tower_version }}/inventory"
+
+- name: Copy Ansible config to Tower box
+  copy:
+    src: "ansible.cfg"
+    dest: "{{ tower_dest }}/ansible-tower-setup-bundle-{{ tower_version }}/ansible.cfg"
+
+- name: Set Ansible root access
+  set_fact:
+    ansible_setup: "ANSIBLE_BECOME_METHOD='sudo' ANSIBLE_BECOME=True ./setup.sh"
+  when: (groups['database'] | length) > 0
+
+- name: Setup Tower
+  shell: "{{ ansible_setup | default('./setup.sh') }}"
+  args:
+    chdir: "{{ tower_dest }}/ansible-tower-setup-bundle-{{ tower_version }}"
+
+- name: Ensure backup directory exists
+  file:
+    path: "{{ tower_backup_dest }}"
+    owner: root
+    state: directory
+
+- name: Ensure a backup Tower job is created
+  cron:
+    name: "a job for backing up tower"
+    special_time: daily
+    job: "{{ tower_dest }}/ansible-tower-setup-bundle-{{ tower_version }}/setup.sh -b"
+
+- name: Install pip
+  yum:
+    name: "python2-pip, python-virtualenv"
+    state: present
+
+# to review in case of proxy
+- name: Install tower-cli
+  pip:
+    name: ansible-tower-cli
+
+- name: Configure tower-cli host
+  shell: tower-cli config host localhost
+  when:  ( tower_cli_cfg.exists is not defined ) or  ( "host" not in tower_credentials['content'] )
+
+- name: Configure tower-cli user
+  shell: tower-cli config username admin
+  when:   ( tower_cli_cfg.exists is not defined ) or ( "username" not in tower_credentials['content'] )
+
+- name: Configure tower-cli password
+  shell: tower-cli config password '{{ ansible_admin_password }}'
+  when:  ( tower_cli_cfg.exists is not defined ) or ( "password" not in tower_credentials['content'] )
+...

@@ -1,0 +1,38 @@
+[tower]
+{% if (groups['database'] | length) == 0 %}
+localhost ansible_connection=local
+{% else %}
+{% for node in groups['tower'] %}
+{{ node }} ansible_host={{ node }} ansible_user={{ ansible_user }} ansible_ssh_private_key_file={{ ansible_private_key_file }} become=true become_user=root
+{% endfor %}
+{% endif %}
+
+[database]
+{% for dbhost in groups['database'] %}
+{{ dbhost }} ansible_user={{ ansible_user }} ansible_ssh_private_key_file={{ ansible_private_key_file }} become=true become_user=root
+{% endfor %}
+
+[all:vars]
+admin_password='{{ ansible_admin_password }}'
+
+{% if groups['database'][0] is defined %}
+pg_host='{{ groups['database'][0] }}'
+pg_port='5432'
+{% else %}
+pg_host=''
+pg_port=''
+{% endif %}
+
+pg_database='awx'
+pg_username='awx'
+pg_password='{{ ansible_admin_password }}'
+
+rabbitmq_port=5672
+rabbitmq_vhost=tower
+rabbitmq_username=tower
+rabbitmq_password='{{ ansible_admin_password }}'
+rabbitmq_cookie=rabbitmqcookie
+
+# Isolated Tower nodes automatically generate an RSA key for authentication;
+# To disable this behavior, set this value to false
+# isolated_key_generation=true
